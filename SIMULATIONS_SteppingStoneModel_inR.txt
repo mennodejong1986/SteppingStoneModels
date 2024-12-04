@@ -1,0 +1,207 @@
+# R-function to simulate stepping-stone models
+# written by Menno de Jong, after: Slatkin, 1991, Inbreeding coefficients and coalescence times
+# depends on packages: 'adegenet', 'ape', 'poppr' 
+
+ibdsim<-function(nloci=10000,ne=500,p=0.5,ngen=100,x=10,y=1,nsample=3,dopcoa=TRUE,dotree=TRUE,m=0.025,silent=TRUE,dolinear=TRUE,n_islands=0)
+	{
+	npops				<- x*y					# without optional islands
+	npops2				<- npops+n_islands		# including optional islands
+	mypops				<- paste("p",c(1:npops2),sep="")
+	startvec			<- rpois(n=nloci,lambda=p*100)/100
+	freqmat				<- matrix(ncol=npops2,nrow=nloci)
+	colnames(freqmat)	<- mypops
+	rownames(freqmat)	<- paste("loc",c(1:nloci),sep="")
+	for(popnr in c(1:npops2)){freqmat[,popnr]<-startvec}  
+	#
+	cat("Starting simulations...",sep="\n")
+	for(gennr in c(2:ngen))
+		{
+		if(gennr%%100==0){cat(paste("Generation ",gennr,sep=""),sep="\n")}
+		# drift:
+		for(popnr in c(1:npops2))
+			{
+			freqmat[,popnr]		<- rbinom(prob=freqmat[,popnr],size=2*ne,n=nloci)/(2*ne)
+			}
+		driftmat				<- freqmat		
+		# migration:
+		if(m>0)
+			{
+			for(popnr in c(1:npops))
+				{
+				if(y==1)
+					{
+					leftpop			<- ifelse(popnr==1,ifelse(dolinear,1,npops),popnr-1)
+					rightpop		<- ifelse(popnr==npops,ifelse(dolinear,npops,1),popnr+1)
+					freqmat[,popnr]	<- (1-m)*driftmat[,popnr]+m/2*driftmat[,leftpop]+m/2*driftmat[,rightpop]
+					}else{
+					leftpop			<- ifelse(popnr%%x==1,ifelse(dolinear,popnr,popnr+x-1),popnr-1)
+					rightpop		<- ifelse(popnr%%x==0,ifelse(dolinear,popnr,popnr-x+1),popnr+1)
+					toppop			<- ifelse(popnr<=x,ifelse(dolinear,popnr,popnr+x*(y-1)),popnr-x)
+					bottompop		<- ifelse(popnr>(y-1)*x,ifelse(dolinear,popnr,popnr-x*(y-1)),popnr+x)	
+					#cat(paste(paste(popnr,":",sep=""),leftpop,toppop,rightpop,bottompop,sep=" "),sep="\n")
+					freqmat[,popnr]	<- (1-m)*driftmat[,popnr]+m/4*driftmat[,leftpop]+m/4*driftmat[,toppop]+m/4*driftmat[,rightpop]+m/4*driftmat[,bottompop]
+					}
+				}
+			}
+		}
+	#
+	# calculate hudson fst:
+	cat("Calculating Fst...",sep="\n")
+	fstmatrix	<<- matrix(NA,nrow=npops2,ncol=npops2)
+	distmatrix	<<- fstmatrix
+	npairs		<- npops2^2
+	fstdf		<<- data.frame("pop1"=rep(NA,npairs),"pop2"=rep(NA,npairs),"dist"=rep(NA,npairs),"fst"=rep(NA,npairs))
+	for(i in c(1:npops2))
+		{
+		for(j in c(1:npops2))
+			{
+			if(i==j)
+				{
+				fstmatrix[i,j]			<<- 0
+				fstdf[(i-1)*npops2+j,]	<<- c(i,j,0,0)
+				}else{
+				# genetic distance:
+				pi1						<- mean(2*freqmat[,i]*(1-freqmat[,i]))
+				pi2						<- mean(2*freqmat[,j]*(1-freqmat[,j]))
+				pixy					<- 0.5*(pi1+pi2)
+				dxy						<- mean(freqmat[,i]*(1-freqmat[,j])+(1-freqmat[,i])*freqmat[,j]) 
+				pairfst					<- (dxy-pixy)/dxy
+				fstmatrix[i,j]			<<- pairfst
+				fstmatrix[j,i]			<<- pairfst
+				fstdf[(i-1)*npops2+j,]	<<- c(i,j,NA,pairfst)
+				}
+			}
+		}
+	#
+	# calculate geographical distance:
+	# Note: this script only considers step-size distance. Not the number of routes possible.
+	# Hence, edge populations have a higher distance than expected based on their actual distance.
+	cat("Calculating geographical distance...",sep="\n")
+	for(i in c(1:npops2))
+		{
+		for(j in c(1:npops2))
+			{
+			if(i==j)
+				{
+				fstdf$dist[(i-1)*npops2+j]		<<- 0
+				}else{
+				if(i>npops|j>npops)
+					{
+					fstdf$dist[(i-1)*npops2+j]	<<- -1		# comparison to island populations
+					}else{
+					# positions in grid:
+					xi		<- (i-1)%%x
+					yi		<- ceiling(i/x)
+					xj		<- (j-1)%%x
+					yj		<- ceiling(j/x)
+					if(dolinear)
+						{
+						if(y==1|x==1)
+							{
+							mydist			<- abs(i-j)
+							}else{
+							mydist			<- abs(xi-xj)+abs(yi-yj)
+							}
+						}else{
+						if(y==1|x==1)
+							{
+							mydist			<- ifelse(abs(i-j)>npops/2,npops-abs(i-j),abs(i-j))
+							}else{
+							xdist			<- ifelse(abs(xi-xj)>x/2,x-abs(xi-xj),abs(xi-xj))
+							ydist			<- ifelse(abs(yi-yj)>y/2,y-abs(yi-yj),abs(yi-yj))
+							mydist			<- xdist+ydist
+							}
+						}
+					fstdf$dist[(i-1)*npops2+j]<<- mydist
+					}
+				}
+			}
+		}
+	# create genlight matrix:
+	cat("Creating genlight object...",sep="\n")
+	ninds					<- nsample*npops2
+	genomatrix				<- matrix(NA,nrow=ninds,ncol=nloci)
+	rownames(genomatrix)	<- paste(rep(mypops,each=nsample),c(1:nsample),sep="_")
+	colnames(genomatrix)	<- paste("loc",c(1:nloci),sep="")
+	for(indnr in c(1:ninds))
+		{
+		popnr				<- ceiling(indnr/nsample)
+		p0					<- (freqmat[,popnr])^2
+		p2					<- (1-freqmat[,popnr])^2
+		genomatrix[indnr,]	<- ifelse(runif(nloci)<=p0,0,ifelse(runif(nloci)<=p2,2,1))
+		}
+	# 
+	# distance matrix:
+	simgl		<<- adegenet::as.genlight(genomatrix)
+	distmat		<<- poppr::bitwise.dist(simgl,mat=TRUE,euclidean=TRUE)
+	#
+	#
+	if(dopcoa)
+		{
+		p 			<- ape::pcoa(distmat, correction="none", rn=NULL)
+		plotlabel	<- ifelse(y>1&x>1,ifelse(dolinear,ifelse(x==y,"square","rectangle"),"torus"),ifelse(dolinear,"linear","circle"))
+		plotname	<- paste("IBD_pcoa",plotlabel,x,y,nloci,ne,ngen,n_islands,"points.pdf",sep=".")
+		pdf(plotname)
+		myp1		<- p$vectors[,1]
+		myp2		<- p$vectors[,2]
+		plot(myp1,myp2,col="white")
+		points(myp1,myp2,pch=16,cex=2,col=rep(rainbow(npops),each=nsample))
+		dev.off()
+		cat("pcoa-plot has been exported to the directory:",sep="\n")
+		cat(getwd(),sep="\n")
+		#
+		plotname	<- paste("IBD_pcoa",plotlabel,x,y,nloci,ne,ngen,n_islands,"text.pdf",sep=".")
+		pdf(plotname)
+		myp1		<- p$vectors[,1]
+		myp2		<- p$vectors[,2]
+		plot(myp1,myp2,col="white")
+		popvec		<- vector()
+		for(k in c(1:nrow(p$vectors)))
+			{
+			popvec[k]	<- strsplit(rownames(p$vectors)[k],split="_")[[1]][1]
+			}
+		text(myp1,myp2,popvec,cex=1.5,col=rep(rainbow(npops),each=nsample))
+		dev.off()
+		cat("pcoa-plot has been exported to the directory:",sep="\n")
+		cat(getwd(),sep="\n")
+		}
+	if(dopcoa&dotree){par(mfrow=c(1,3))}
+	if(dopcoa)
+		{
+		popvec		<- vector()
+		for(k in c(1:nrow(p$vectors)))
+			{
+			popvec[k]	<- strsplit(rownames(p$vectors)[k],split="_")[[1]][1]
+			}
+		myp1		<- p$vectors[,1]
+		myp2		<- p$vectors[,2]
+		plot(myp1,myp2,col="white")
+		text(myp1,myp2,popvec,cex=1.25,col=rep(rainbow(npops),each=nsample))
+		}
+	if(dotree)
+		{
+		mytree		<- ape::nj(distmat)
+		ape::plot.phylo(mytree,type="unrooted",lab4ut="axial",cex=1.25)
+		}
+	boxplot(fstdf$fst~fstdf$dist,xlab="Distance",ylab="Hudson Fst")
+	stripchart(fst~dist,data=fstdf,vertical=TRUE,method="jitter",pch=16,cex=1.25,bg="bisque",add=TRUE,col="orange")	
+	if(!dolinear)
+		{
+		distvec			<- c(0,seq(1:(npops/2)))
+		expfst			<- 1/(1+(8*ne*m)/distvec)
+		for(k in c(1:length(distvec)))
+			{
+			points(k,expfst[k],pch=16,col="red",cex=2)
+			}
+		}
+	# expected fst for directly adjacent population:
+	abline(h=1/(1+(8*ne*m/2)),lty=2)	
+	# note, this is equal to: abline(h=1/(1+(4*ne*m)),lty=2)
+	# the question is: what is the effective migration rate for more non-neighbour populations?
+	#
+	# expected fst for distant populations (?):
+	if(!dolinear){abline(h=10/(1+(8*ne*m/2)),lty=2,col="red")}
+	#
+	# the lower Ne, the higher Fst
+	# the lower m, the higher Fst 
+	}
